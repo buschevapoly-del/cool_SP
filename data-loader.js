@@ -13,7 +13,7 @@ class DataLoader {
         this.returns = [];
         this.trainIndices = [];
         this.testIndices = [];
-        this.dataUrl = 'https://raw.githubusercontent.com/buschevapoly-del/again/main/my_data.csv';
+        this.dataUrl = 'https://raw.githubusercontent.com/buschevapoly-del/cool_SP/main/my_data.csv';
         this.insights = {};
     }
 
