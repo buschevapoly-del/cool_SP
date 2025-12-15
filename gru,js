@@ -48,8 +48,7 @@ class GRUModel {
         console.log('Train method called with:', { 
             X_shape: X_train?.shape, 
             y_shape: y_train?.shape,
-            epochs: epochs,
-            callbacks: typeof callbacks 
+            epochs: epochs
         });
         
         if (!this.model) {
@@ -77,9 +76,9 @@ class GRUModel {
         
         console.log(`Training: epochs=${epochs}, batch=${batchSize}, samples=${sampleCount}`);
         
+        const startTime = Date.now();
+        
         try {
-            const startTime = Date.now();
-            
             this.trainingHistory = await this.model.fit(X_train, y_train, {
                 epochs: epochs,
                 batchSize: batchSize,
@@ -93,15 +92,19 @@ class GRUModel {
                         if (callbacks.onEpochEnd) {
                             try {
                                 callbacks.onEpochEnd(epoch, {
-                                    ...logs,
+                                    loss: logs?.loss || 0,
+                                    val_loss: logs?.val_loss || 0,
+                                    mse: logs?.mse || 0,
                                     elapsed: (Date.now() - startTime) / 1000,
-                                    progress: (currentEpoch / epochs) * 100
+                                    progress: (currentEpoch / epochs) * 100,
+                                    epochsRemaining: epochs - currentEpoch
                                 });
                             } catch (e) {
                                 console.warn('Callback error:', e);
                             }
                         }
                         
+                        // Yield to main thread every few epochs
                         if (epoch % 3 === 0) {
                             await tf.nextFrame();
                         }
@@ -128,7 +131,14 @@ class GRUModel {
             
         } catch (error) {
             console.error('Training error:', error);
-            this.isTrained = true;
+            this.isTrained = false;
+            
+            // Try to cleanup and rebuild if training fails
+            if (this.model) {
+                this.model.dispose();
+                this.model = null;
+            }
+            
             throw error;
         }
     }
