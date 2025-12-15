@@ -353,40 +353,56 @@ class StockPredictorApp {
             progressFill.style.width = '0%';
             
             const startTime = Date.now();
+            let lastEpochUpdate = 0;
             
+            // Build the model if it doesn't exist
+            if (!this.model.model) {
+                this.model.buildModel();
+            }
+            
+            // Prepare callbacks for training
+            const callbacks = {
+                onEpochEnd: (epoch, logs) => {
+                    const now = Date.now();
+                    // Throttle updates to avoid UI lag
+                    if (now - lastEpochUpdate > 500) {
+                        const progress = ((epoch + 1) / epochs) * 100;
+                        progressFill.style.width = `${progress}%`;
+                        
+                        const elapsed = ((now - startTime) / 1000).toFixed(1);
+                        const estimatedRemaining = (epochs - (epoch + 1)) * (elapsed / (epoch + 1));
+                        
+                        this.updateStatus('trainingStatus', 
+                            `⚡ Epoch ${epoch + 1}/${epochs} | Loss: ${logs.loss?.toFixed(6) || '0.000000'} | Time: ${elapsed}s`,
+                            'info'
+                        );
+                        lastEpochUpdate = now;
+                    }
+                },
+                onTrainEnd: (totalTime) => {
+                    this.isTraining = false;
+                    progressBar.style.display = 'none';
+                    document.getElementById('predictBtn').disabled = false;
+                    
+                    // Evaluate the model
+                    const metrics = this.model.evaluate(this.dataLoader.X_test, this.dataLoader.y_test);
+                    
+                    this.updateStatus('trainingStatus', 
+                        `✅ Training completed in ${totalTime}s! RMSE: ${(metrics.rmse * 100).toFixed(3)}%`,
+                        'success'
+                    );
+                    
+                    // Show training metrics
+                    this.showTrainingMetrics(metrics);
+                }
+            };
+            
+            // Start training with proper parameters
             await this.model.train(
                 this.dataLoader.X_train,
                 this.dataLoader.y_train,
                 epochs,
-                {
-                    onEpochEnd: (epoch, logs) => {
-                        const progress = ((epoch + 1) / epochs) * 100;
-                        progressFill.style.width = `${progress}%`;
-                        
-                        const elapsed = logs.elapsed?.toFixed(1) || '0';
-                        const remaining = logs.epochsRemaining || 0;
-                        
-                        this.updateStatus('trainingStatus', 
-                            `⚡ Epoch ${epoch + 1}/${epochs} | Loss: ${logs.loss?.toFixed(6) || '0.000000'}`,
-                            'info'
-                        );
-                    },
-                    onTrainEnd: (totalTime) => {
-                        this.isTraining = false;
-                        progressBar.style.display = 'none';
-                        document.getElementById('predictBtn').disabled = false;
-                        
-                        const metrics = this.model.evaluate(this.dataLoader.X_test, this.dataLoader.y_test);
-                        
-                        this.updateStatus('trainingStatus', 
-                            `✅ Training completed! RMSE: ${(metrics.rmse * 100).toFixed(3)}%`,
-                            'success'
-                        );
-                        
-                        // Показываем метрики обучения
-                        this.showTrainingMetrics(metrics);
-                    }
-                }
+                callbacks
             );
             
         } catch (error) {
@@ -394,9 +410,11 @@ class StockPredictorApp {
             document.getElementById('progressBar').style.display = 'none';
             document.getElementById('predictBtn').disabled = false;
             
+            console.error('Training error:', error);
+            
             this.updateStatus('trainingStatus', 
-                '⚠️ Training completed (optimized mode)',
-                'warning'
+                `⚠️ Training error: ${error.message}`,
+                'error'
             );
         }
     }
