@@ -13,71 +13,134 @@ class DataLoader {
         this.returns = [];
         this.trainIndices = [];
         this.testIndices = [];
-        this.dataUrl = 'https://raw.githubusercontent.com/buschevapoly-del/cool_SP/main/my_data.csv';
+        this.dataUrl = 'https://raw.githubusercontent.com/buschevapoly-del/again/main/my_data.csv';
         this.insights = {};
     }
 
     async loadCSVFromGitHub() {
         try {
-            const response = await fetch(this.dataUrl);
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            console.log('Starting data load from:', this.dataUrl);
+            
+            // Добавляем временную метку для предотвращения кэширования
+            const timestamp = new Date().getTime();
+            const url = `${this.dataUrl}?t=${timestamp}`;
+            
+            const response = await fetch(url, {
+                cache: 'no-cache',
+                headers: {
+                    'Accept': 'text/csv',
+                    'Cache-Control': 'no-cache'
+                }
+            });
+            
+            if (!response.ok) {
+                console.error('HTTP error:', response.status, response.statusText);
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
             const content = await response.text();
+            console.log('Data loaded successfully, length:', content.length);
+            
+            if (!content || content.trim().length === 0) {
+                throw new Error('Empty CSV file received');
+            }
+            
             this.parseCSV(content);
+            console.log('Data parsed successfully, rows:', this.data?.length || 0);
+            
+            if (!this.data || this.data.length === 0) {
+                throw new Error('No valid data found in CSV');
+            }
+            
             return this.data;
         } catch (error) {
+            console.error('Error loading CSV:', error);
             throw new Error(`Failed to load data: ${error.message}`);
         }
     }
 
     parseCSV(content) {
-        const lines = content.trim().split('\n');
-        const parsedData = [];
-        this.dateLabels = [];
-        this.returns = [];
+        try {
+            console.log('Parsing CSV content...');
+            const lines = content.trim().split('\n');
+            console.log('Total lines in CSV:', lines.length);
+            
+            if (lines.length < 2) {
+                throw new Error('CSV file has less than 2 lines (header + data)');
+            }
+            
+            const parsedData = [];
+            this.dateLabels = [];
+            this.returns = [];
 
-        // Fast parsing with pre-allocated arrays
-        for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
+            // Parse header
+            const header = lines[0].trim();
+            console.log('CSV Header:', header);
 
-            const parts = line.split(';');
-            if (parts.length >= 2) {
-                const dateStr = parts[0].trim();
-                const price = parseFloat(parts[1].trim());
-                
-                if (!isNaN(price) && price > 0) {
-                    parsedData.push({ date: dateStr, price: price });
-                    this.dateLabels.push(dateStr);
+            // Fast parsing with pre-allocated arrays
+            let validRows = 0;
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+
+                const parts = line.split(';');
+                if (parts.length >= 2) {
+                    const dateStr = parts[0].trim();
+                    const price = parseFloat(parts[1].trim());
+                    
+                    if (!isNaN(price) && price > 0) {
+                        parsedData.push({ date: dateStr, price: price });
+                        this.dateLabels.push(dateStr);
+                        validRows++;
+                    } else {
+                        console.warn('Skipping invalid row:', line);
+                    }
                 }
             }
-        }
 
-        // Sort by date
-        parsedData.sort((a, b) => {
-            const dateA = this.parseDate(a.date);
-            const dateB = this.parseDate(b.date);
-            return dateA - dateB;
-        });
-        
-        // Calculate returns efficiently
-        const returns = new Array(parsedData.length - 1);
-        for (let i = 1; i < parsedData.length; i++) {
-            returns[i-1] = (parsedData[i].price - parsedData[i-1].price) / parsedData[i-1].price;
-        }
-        this.returns = returns;
+            console.log('Valid rows parsed:', validRows);
 
-        this.data = parsedData;
-        
-        // Calculate insights
-        this.calculateInsights();
-        
-        if (this.data.length < 65) {
-            throw new Error(`Insufficient data. Need at least 65 days, got ${this.data.length}`);
+            if (parsedData.length === 0) {
+                throw new Error('No valid data rows found');
+            }
+
+            // Sort by date
+            parsedData.sort((a, b) => {
+                const dateA = this.parseDate(a.date);
+                const dateB = this.parseDate(b.date);
+                return dateA - dateB;
+            });
+            
+            // Calculate returns efficiently
+            if (parsedData.length > 1) {
+                const returns = new Array(parsedData.length - 1);
+                for (let i = 1; i < parsedData.length; i++) {
+                    returns[i-1] = (parsedData[i].price - parsedData[i-1].price) / parsedData[i-1].price;
+                }
+                this.returns = returns;
+            }
+
+            this.data = parsedData;
+            
+            // Calculate insights
+            this.calculateInsights();
+            
+            if (this.data.length < 65) {
+                console.warn(`Warning: Only ${this.data.length} days of data (need at least 65)`);
+            }
+            
+            console.log('CSV parsing completed successfully');
+            
+        } catch (error) {
+            console.error('Error parsing CSV:', error);
+            throw error;
         }
     }
 
     calculateInsights() {
         if (!this.data || this.data.length === 0) return;
+        
+        console.log('Calculating insights...');
         
         const prices = this.data.map(d => d.price);
         const returns = this.returns;
@@ -88,33 +151,47 @@ class DataLoader {
         const totalReturn = (lastPrice - firstPrice) / firstPrice;
         
         // 2. Daily Returns Statistics
-        const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-        const variance = returns.reduce((sq, n) => sq + Math.pow(n - meanReturn, 2), 0) / returns.length;
-        const stdReturn = Math.sqrt(variance);
-        const annualizedVolatility = stdReturn * Math.sqrt(252);
+        let meanReturn = 0;
+        let variance = 0;
+        let stdReturn = 0;
+        let annualizedVolatility = 0;
+        
+        if (returns.length > 0) {
+            meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+            variance = returns.reduce((sq, n) => sq + Math.pow(n - meanReturn, 2), 0) / returns.length;
+            stdReturn = Math.sqrt(variance);
+            annualizedVolatility = stdReturn * Math.sqrt(252);
+        }
         
         // 3. Rolling Volatility (20-day)
         const window = 20;
         const rollingVolatilities = [];
-        for (let i = window; i <= returns.length; i++) {
-            const windowReturns = returns.slice(i - window, i);
-            const windowMean = windowReturns.reduce((a, b) => a + b, 0) / window;
-            const windowVar = windowReturns.reduce((sq, n) => sq + Math.pow(n - windowMean, 2), 0) / window;
-            rollingVolatilities.push(Math.sqrt(windowVar) * Math.sqrt(252));
+        if (returns.length >= window) {
+            for (let i = window; i <= returns.length; i++) {
+                const windowReturns = returns.slice(i - window, i);
+                const windowMean = windowReturns.reduce((a, b) => a + b, 0) / window;
+                const windowVar = windowReturns.reduce((sq, n) => sq + Math.pow(n - windowMean, 2), 0) / window;
+                rollingVolatilities.push(Math.sqrt(windowVar) * Math.sqrt(252));
+            }
         }
         
         // 4. Trend Detection (Simple Moving Average Crossover)
         const sma50 = this.calculateSMA(prices, 50);
         const sma200 = this.calculateSMA(prices, 200);
-        const currentTrend = sma50[sma50.length - 1] > sma200[sma200.length - 1] ? 'Bullish' : 'Bearish';
+        let currentTrend = 'N/A';
+        if (sma50.length > 0 && sma200.length > 0) {
+            currentTrend = sma50[sma50.length - 1] > sma200[sma200.length - 1] ? 'Bullish' : 'Bearish';
+        }
         
         // 5. Maximum Drawdown
         let maxDrawdown = 0;
-        let peak = prices[0];
-        for (let i = 1; i < prices.length; i++) {
-            if (prices[i] > peak) peak = prices[i];
-            const drawdown = (peak - prices[i]) / peak;
-            if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+        if (prices.length > 0) {
+            let peak = prices[0];
+            for (let i = 1; i < prices.length; i++) {
+                if (prices[i] > peak) peak = prices[i];
+                const drawdown = (peak - prices[i]) / peak;
+                if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+            }
         }
         
         this.insights = {
@@ -130,33 +207,38 @@ class DataLoader {
                 meanDailyReturn: (meanReturn * 100).toFixed(4) + '%',
                 stdDailyReturn: (stdReturn * 100).toFixed(4) + '%',
                 annualizedVolatility: (annualizedVolatility * 100).toFixed(2) + '%',
-                sharpeRatio: (meanReturn / stdReturn * Math.sqrt(252)).toFixed(2),
-                positiveDays: ((returns.filter(r => r > 0).length / returns.length) * 100).toFixed(1) + '%'
+                sharpeRatio: (stdReturn > 0 ? (meanReturn / stdReturn * Math.sqrt(252)) : 0).toFixed(2),
+                positiveDays: (returns.length > 0 ? (returns.filter(r => r > 0).length / returns.length) * 100 : 0).toFixed(1) + '%'
             },
             trends: {
                 currentTrend: currentTrend,
-                sma50: sma50[sma50.length - 1].toFixed(2),
-                sma200: sma200[sma200.length - 1].toFixed(2),
-                aboveSMA200: (lastPrice > sma200[sma200.length - 1]) ? 'Yes' : 'No',
-                trendStrength: Math.abs((sma50[sma50.length - 1] - sma200[sma200.length - 1]) / sma200[sma200.length - 1] * 100).toFixed(2) + '%'
+                sma50: sma50.length > 0 ? sma50[sma50.length - 1].toFixed(2) : 'N/A',
+                sma200: sma200.length > 0 ? sma200[sma200.length - 1].toFixed(2) : 'N/A',
+                aboveSMA200: sma200.length > 0 ? (lastPrice > sma200[sma200.length - 1] ? 'Yes' : 'No') : 'N/A',
+                trendStrength: sma200.length > 0 && sma200[sma200.length - 1] > 0 ? 
+                    Math.abs((sma50[sma50.length - 1] - sma200[sma200.length - 1]) / sma200[sma200.length - 1] * 100).toFixed(2) + '%' : 'N/A'
             },
             volatility: {
-                currentRollingVol: (rollingVolatilities[rollingVolatilities.length - 1] || 0).toFixed(2) + '%',
-                avgRollingVol: (rollingVolatilities.reduce((a, b) => a + b, 0) / rollingVolatilities.length).toFixed(2) + '%',
-                maxRollingVol: (Math.max(...rollingVolatilities) || 0).toFixed(2) + '%',
-                minRollingVol: (Math.min(...rollingVolatilities) || 0).toFixed(2) + '%'
+                currentRollingVol: (rollingVolatilities.length > 0 ? rollingVolatilities[rollingVolatilities.length - 1] : 0).toFixed(2) + '%',
+                avgRollingVol: (rollingVolatilities.length > 0 ? rollingVolatilities.reduce((a, b) => a + b, 0) / rollingVolatilities.length : 0).toFixed(2) + '%',
+                maxRollingVol: (rollingVolatilities.length > 0 ? Math.max(...rollingVolatilities) : 0).toFixed(2) + '%',
+                minRollingVol: (rollingVolatilities.length > 0 ? Math.min(...rollingVolatilities) : 0).toFixed(2) + '%'
             },
             rollingVolatilities: rollingVolatilities,
             sma50: sma50,
             sma200: sma200
         };
+        
+        console.log('Insights calculated:', this.insights.basic);
     }
     
     calculateSMA(prices, period) {
         const sma = [];
-        for (let i = period - 1; i < prices.length; i++) {
-            const sum = prices.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
-            sma.push(sum / period);
+        if (prices.length >= period) {
+            for (let i = period - 1; i < prices.length; i++) {
+                const sum = prices.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+                sma.push(sum / period);
+            }
         }
         return sma;
     }
@@ -170,14 +252,18 @@ class DataLoader {
     }
 
     prepareData(windowSize = 60, predictionHorizon = 5, testSplit = 0.2) {
+        console.log('Preparing data for training...');
+        
         if (!this.returns || this.returns.length === 0) {
-            throw new Error('No data available. Load CSV first.');
+            throw new Error('No returns data available. Load CSV first.');
         }
 
         const totalSamples = this.returns.length - windowSize - predictionHorizon + 1;
         
+        console.log(`Total returns: ${this.returns.length}, Total samples: ${totalSamples}`);
+        
         if (totalSamples <= 0) {
-            throw new Error('Not enough data');
+            throw new Error(`Not enough data. Need at least ${windowSize + predictionHorizon} days of returns.`);
         }
 
         // Normalize returns
@@ -218,6 +304,8 @@ class DataLoader {
         
         const range = this.max - this.min || 1;
         this.normalizedData = this.returns.map(ret => (ret - this.min) / range);
+        
+        console.log(`Normalized returns: min=${this.min}, max=${this.max}, range=${range}`);
     }
 
     denormalize(value) {
@@ -240,7 +328,7 @@ class DataLoader {
     }
 
     getDataSummary() {
-        return this.insects.basic || null;
+        return this.insights.basic || null;
     }
     
     getInsights() {
